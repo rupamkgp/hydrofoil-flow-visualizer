@@ -51,7 +51,7 @@ Users can precisely control the simulation parameters:
 ### Web Visualizer (Recommended)
 Because the simulator is built entirely on the client, no server is required:
 1. Clone the repository
-2. Simply double-click on `hydrofoil_visualization.html` to open it natively in any modern web browser!
+2. Simply double-click on `index.html` to open it natively in any modern web browser!
 
 ### Python Simulator (Optional)
 If you wish to view the static matplotlib reference script:
@@ -72,7 +72,7 @@ python anti_gravity_hydrofoil.py
 ```
 hydrofoil-flow-visualizer/
 │── anti_gravity_hydrofoil.py       # Python mathematical flow visualization logic
-│── hydrofoil_visualization.html    # Full interactive web simulation (Frontend, JS Physics, & UI)
+│── index.html                      # Full interactive web simulation (Frontend, JS Physics, & UI)
 │── README.md
 ```
 
