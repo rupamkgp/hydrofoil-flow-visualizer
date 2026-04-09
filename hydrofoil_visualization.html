@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hydrofoil Flow Simulation</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background: #0f172a;
+            color: #e2e8f0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden;
+            display: flex;
+        }
+
+        body.light-mode {
+            background: #f8fafc;
+            color: #0f172a;
+        }
+
+        #ui-panel {
+            width: 300px;
+            background: rgba(15, 23, 42, 0.95);
+            border-right: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 25px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            z-index: 10;
+            overflow-y: auto;
+        }
+
+        body.light-mode #ui-panel {
+            background: rgba(255, 255, 255, 0.95);
+            border-right: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        h2 {
+            margin: 0 0 5px 0;
+            font-size: 20px;
+        }
+
+        .slider-row {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .slider-row label {
+            font-size: 13px;
+            font-weight: 500;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .val-display {
+            color: #38bdf8;
+            font-family: monospace;
+        }
+
+        body.light-mode .val-display {
+            color: #0284c7;
+        }
+
+        input[type=range] {
+            width: 100%;
+        }
+
+        #canvas-wrap {
+            flex-grow: 1;
+            position: relative;
+            cursor: grab;
+        }
+
+        #canvas-wrap:active {
+            cursor: grabbing;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .info-box {
+            margin-top: 10px;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #94a3b8;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        body.light-mode .info-box {
+            color: #475569;
+            background: rgba(0, 0, 0, 0.02);
+            border-color: rgba(0, 0, 0, 0.05);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="ui-panel">
+        <h2>Hydrofoil Sim</h2>
+
+        <div class="slider-row">
+            <label>Velocity (U) <span class="val-display" id="val-u">1.0</span></label>
+            <input type="range" id="slider-u" min="0.5" max="5.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="slider-row">
+            <label>Circulation (Γ) <span class="val-display" id="val-g">0.0</span></label>
+            <input type="range" id="slider-g" min="-10" max="10" step="0.1" value="0.0">
+        </div>
+
+        <div class="slider-row">
+            <label>Radius Size <span class="val-display" id="val-r">1.0</span></label>
+            <input type="range" id="slider-r" min="0.5" max="2.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="slider-row">
+            <label>Angle (α) <span class="val-display" id="val-a">0°</span></label>
+            <input type="range" id="slider-a" min="0" max="360" step="1" value="0">
+        </div>
+
+        <div class="slider-row">
+            <label>Particle Density <span class="val-display" id="val-d">1.5</span></label>
+            <input type="range" id="slider-d" min="0.5" max="3.0" step="0.1" value="1.5">
+        </div>
+
+        <div class="slider-row">
+            <label>Resolution steps <span class="val-display" id="val-res">200</span></label>
+            <input type="range" id="slider-res" min="100" max="400" step="10" value="200">
+        </div>
+
+        <div style="margin-top: 5px;">
+            <label style="font-size: 13px; font-weight: 500; cursor: pointer;">
+                <input type="checkbox" id="chk-stag" checked style="margin-right:8px;"> Show Stagnation
+            </label>
+        </div>
+        <div>
+            <label style="font-size: 13px; font-weight: 500; cursor: pointer;">
+                <input type="checkbox" id="chk-theme" style="margin-right:8px;"> Light Mode
+            </label>
+        </div>
+
+        <div class="info-box">
+            Drag the hydrofoil on the canvas! Moving it calculates the apparent wind and shifts the velocity field
+            dynamically.
+        </div>
+    </div>
+
+    <div id="canvas-wrap">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <script>
+        class Complex {
+            constructor(r, i) { this.re = r; this.im = i; }
+            add(c) { return new Complex(this.re + c.re, this.im + c.im); }
+            sub(c) { return new Complex(this.re - c.re, this.im - c.im); }
+            mul(c) { return new Complex(this.re * c.re - this.im * c.im, this.re * c.im + this.im * c.re); }
+            div(c) {
+                let d = c.re * c.re + c.im * c.im;
+                return new Complex((this.re * c.re + this.im * c.im) / d, (this.im * c.re - this.re * c.im) / d);
+            }
+        }
+
+        let p = {
+            u: 1.0,
+            gamma: 0.0,
+            rScale: 1.0,
+            alpha: 0.0,
+            density: 1.5,
+            res: 200,
+            showStag: true
+        };
+
+        const viewLen = 3.5;
+        let pts = [];
+
+        let cParam, xc, yc, rCyl, zc;
+        function updateGeom() {
+            cParam = 1.0 * p.rScale;
+            xc = -0.1 * p.rScale;
+            yc = 0.15 * p.rScale;
+            zc = new Complex(xc, yc);
+            rCyl = Math.sqrt((cParam - xc) ** 2 + yc ** 2);
+            calcFoilOutline();
+        }
+
+        let foilPts = [];
+        function calcFoilOutline() {
+            foilPts = [];
+            for (let a = 0; a <= Math.PI * 2 + 0.1; a += 0.05) {
+                let zCirc = new Complex(xc + rCyl * Math.cos(a), yc + rCyl * Math.sin(a));
+                let zInv = new Complex(cParam * cParam, 0).div(zCirc);
+                foilPts.push(zCirc.add(zInv));
+            }
+        }
+        updateGeom();
+
+        let fx = 0, fy = 0, lastFx = 0, lastFy = 0;
+        let vfx = 0, vfy = 0;
+        let dragging = false;
+
+        const cvs = document.getElementById('simCanvas');
+        let w, h, scale, cx, cy;
+
+        cvs.addEventListener('mousedown', e => {
+            let rect = cvs.getBoundingClientRect();
+            let mx = (e.clientX - rect.left - cx) / scale;
+            let my = -(e.clientY - rect.top - cy) / scale;
+
+            if (Math.hypot(mx - fx, my - fy) < rCyl * 2.0) {
+                dragging = true;
+            }
+        });
+
+        cvs.addEventListener('mousemove', e => {
+            if (dragging) {
+                let rect = cvs.getBoundingClientRect();
+                fx = (e.clientX - rect.left - cx) / scale;
+                fy = -(e.clientY - rect.top - cy) / scale;
+            }
+        });
+
+        window.addEventListener('mouseup', () => dragging = false);
+        cvs.addEventListener('mouseleave', () => dragging = false);
+
+        function mapToZ(px, py) {
+            let zeta = new Complex(px, py);
+            let zsq = zeta.mul(zeta).sub(new Complex(4 * cParam * cParam, 0));
+
+            let rsq = Math.sqrt(zsq.re * zsq.re + zsq.im * zsq.im);
+            let th = Math.atan2(zsq.im, zsq.re);
+            let sqr = Math.sqrt(rsq);
+            let root = new Complex(sqr * Math.cos(th / 2), sqr * Math.sin(th / 2));
+
+            let z1 = zeta.add(root).div(new Complex(2, 0));
+            let z2 = zeta.sub(root).div(new Complex(2, 0));
+
+            let d1 = (z1.re - xc) ** 2 + (z1.im - yc) ** 2;
+            let d2 = (z2.re - xc) ** 2 + (z2.im - yc) ** 2;
+            return d1 > d2 ? z1 : z2;
+        }
+
+        function getVel(px, py) {
+            let rx = px - fx;
+            let ry = py - fy;
+
+            let bu = p.u * Math.cos(p.alpha);
+            let bv = p.u * Math.sin(p.alpha);
+            let eu = bu - vfx;
+            let ev = bv - vfy;
+
+            let mag = Math.sqrt(eu * eu + ev * ev);
+            let ang = Math.atan2(ev, eu);
+
+            let z = mapToZ(rx, ry);
+            let Z = z.sub(zc);
+
+            if (Z.re * Z.re + Z.im * Z.im <= rCyl * rCyl * 0.98) return { u: 0, v: 0 };
+
+            let t1 = new Complex(mag * Math.cos(-ang), mag * Math.sin(-ang));
+            let t2top = new Complex(mag * rCyl * rCyl * Math.cos(ang), mag * rCyl * rCyl * Math.sin(ang));
+            let t2 = t2top.div(Z.mul(Z));
+            t2 = new Complex(-t2.re, -t2.im);
+
+            let t3 = new Complex(0, p.gamma / (2 * Math.PI)).div(Z);
+            let dwdz = t1.add(t2).add(t3);
+
+            let zsq = z.mul(z);
+            if (zsq.re * zsq.re + zsq.im * zsq.im < 1e-10) return { u: 0, v: 0 };
+
+            let dzetadz = new Complex(1, 0).sub(new Complex(cParam * cParam, 0).div(zsq));
+
+            if (dzetadz.re * dzetadz.re + dzetadz.im * dzetadz.im < 0.005) {
+                dzetadz.re *= 1.5; dzetadz.im *= 1.5;
+            }
+
+            let wzeta = dwdz.div(dzetadz);
+            return {
+                u: wzeta.re + vfx,
+                v: -wzeta.im + vfy
+            };
+        }
+
+        function getStags() {
+            let eu = p.u * Math.cos(p.alpha) - vfx;
+            let ev = p.u * Math.sin(p.alpha) - vfy;
+
+            let mag = Math.sqrt(eu * eu + ev * ev);
+            let ang = Math.atan2(ev, eu);
+
+            let ca = new Complex(mag * Math.cos(-ang), mag * Math.sin(-ang));
+            let cb = new Complex(0, p.gamma / (2 * Math.PI));
+            let cc = new Complex(-mag * rCyl * rCyl * Math.cos(ang), -mag * rCyl * rCyl * Math.sin(ang));
+
+            let eq = cb.mul(cb).sub(new Complex(4, 0).mul(ca).mul(cc));
+            let r = Math.sqrt(eq.re * eq.re + eq.im * eq.im);
+            let th = Math.atan2(eq.im, eq.re) / 2;
+            let sqroot = new Complex(Math.sqrt(r) * Math.cos(th), Math.sqrt(r) * Math.sin(th));
+
+            let mb = new Complex(-cb.re, -cb.im);
+            let div = new Complex(2, 0).mul(ca);
+
+            let z1 = mb.add(sqroot).div(div).add(zc);
+            let z2 = mb.sub(sqroot).div(div).add(zc);
+
+            let zeta1 = z1.add(new Complex(cParam * cParam, 0).div(z1));
+            let zeta2 = z2.add(new Complex(cParam * cParam, 0).div(z2));
+
+            return [
+                { x: zeta1.re + fx, y: zeta1.im + fy },
+                { x: zeta2.re + fx, y: zeta2.im + fy }
+            ];
+        }
+
+        const ctx = cvs.getContext('2d');
+
+        function doResize() {
+            w = cvs.parentElement.clientWidth;
+            h = cvs.parentElement.clientHeight;
+            cvs.width = w; cvs.height = h;
+            cx = w / 2; cy = h / 2;
+            scale = Math.min(w, h) / (2 * viewLen);
+        }
+        window.addEventListener('resize', doResize);
+        doResize();
+
+        function spawn() {
+            return {
+                x: (Math.random() * 2 - 1) * viewLen * 1.5,
+                y: (Math.random() * 2 - 1) * viewLen * 1.5,
+                life: Math.random() * 150,
+                maxLife: 40 + Math.random() * 100
+            };
+        }
+
+        function syncPts() {
+            let max = Math.floor(1500 * p.density);
+            while (pts.length < max) pts.push(spawn());
+            if (pts.length > max) pts.length = max;
+        }
+        syncPts();
+
+        function bindSl(id, key, valId, type = 'float', fn = v => v) {
+            document.getElementById(id).addEventListener('input', e => {
+                let val = type === 'float' ? parseFloat(e.target.value) : parseInt(e.target.value);
+                p[key] = key === 'alpha' ? val * Math.PI / 180 : val;
+                document.getElementById(valId).textContent = fn(val);
+                if (key === 'rScale') updateGeom();
+                if (key === 'density') syncPts();
+            });
+        }
+
+        bindSl('slider-u', 'u', 'val-u', 'float', v => v.toFixed(1));
+        bindSl('slider-g', 'gamma', 'val-g', 'float', v => v.toFixed(1));
+        bindSl('slider-r', 'rScale', 'val-r', 'float', v => v.toFixed(1));
+        bindSl('slider-a', 'alpha', 'val-a', 'float', v => v + "°");
+        bindSl('slider-d', 'density', 'val-d', 'float', v => v.toFixed(1));
+        bindSl('slider-res', 'res', 'val-res', 'int');
+
+        document.getElementById('chk-stag').addEventListener('change', e => p.showStag = e.target.checked);
+        document.getElementById('chk-theme').addEventListener('change', e => {
+            document.body.className = e.target.checked ? 'light-mode' : '';
+        });
+
+        let lt = performance.now();
+        function draw(t) {
+            let dt = (t - lt) / 1000;
+            if (dt > 0.05) dt = 0.05;
+            lt = t;
+
+            if (dt > 0.001) {
+                vfx = (fx - lastFx) / dt;
+                vfy = (fy - lastFy) / dt;
+            }
+            if (!dragging) {
+                vfx *= 0.8;
+                vfy *= 0.8;
+            }
+
+            let vm = Math.hypot(vfx, vfy);
+            if (vm > 20) { vfx = (vfx / vm) * 20; vfy = (vfy / vm) * 20; }
+            lastFx = fx; lastFy = fy;
+
+            let steps = Math.ceil(p.res / 50);
+            let curDt = dt / steps;
+
+            let isLight = document.body.classList.contains('light-mode');
+            ctx.fillStyle = isLight ? "rgba(248, 250, 252, 0.2)" : "rgba(15, 23, 42, 0.2)";
+            ctx.fillRect(0, 0, w, h);
+
+            if (p.showStag) {
+                getStags().forEach(pt => {
+                    let sx = cx + pt.x * scale;
+                    let sy = cy - pt.y * scale;
+                    if (sx > -50 && sx < w + 50 && sy > -50 && sy < h + 50) {
+                        ctx.beginPath();
+                        ctx.arc(sx, sy, 5, 0, 2 * Math.PI);
+                        ctx.fillStyle = '#f43f5e';
+                        ctx.shadowBlur = 10;
+                        ctx.shadowColor = '#fb7185';
+                        ctx.fill();
+                        ctx.shadowBlur = 0;
+                    }
+                });
+            }
+
+            ctx.beginPath();
+            for (let i = 0; i < foilPts.length; i++) {
+                let pt = foilPts[i];
+                let sx = cx + (pt.re + fx) * scale;
+                let sy = cy - (pt.im + fy) * scale;
+                if (i === 0) ctx.moveTo(sx, sy);
+                else ctx.lineTo(sx, sy);
+            }
+            ctx.fillStyle = isLight ? '#e2e8f0' : '#1e293b';
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#0ea5e9';
+            ctx.stroke();
+
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.strokeStyle = '#38bdf8';
+
+            for (let i = 0; i < pts.length; i++) {
+                let pt = pts[i];
+                let sx1 = cx + pt.x * scale;
+                let sy1 = cy - pt.y * scale;
+
+                for (let s = 0; s < steps; s++) {
+                    let vel = getVel(pt.x, pt.y);
+                    pt.x += vel.u * curDt * 1.5;
+                    pt.y += vel.v * curDt * 1.5;
+                }
+
+                ctx.moveTo(sx1, sy1);
+                ctx.lineTo(cx + pt.x * scale, cy - pt.y * scale);
+                pt.life++;
+
+                let rx = pt.x - fx;
+                let ry = pt.y - fy;
+                let tz = mapToZ(rx, ry);
+
+                if (pt.life > pt.maxLife || Math.abs(pt.x) > viewLen * 1.5 || Math.abs(pt.y) > viewLen * 1.5 ||
+                    (Math.pow(tz.re - xc, 2) + Math.pow(tz.im - yc, 2) <= rCyl * rCyl * 1.05)) {
+                    pts[i] = spawn();
+                }
+            }
+            ctx.stroke();
+
+            requestAnimationFrame(draw);
+        }
+
+        requestAnimationFrame(draw);
+    </script>
+</body>
+
+</html>
